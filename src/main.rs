@@ -1,5 +1,6 @@
-use rand::Rng;
-use std::iter;
+use glam::Vec2;
+use rand::{rngs::ThreadRng, Rng};
+use std::{f32::consts::PI, iter};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 use winit::{
@@ -18,7 +19,20 @@ const NUM_ANTS: u32 = 64;
 struct Ant {
     pos: [f32; 2],
     angle: f32,
-    _padding: f32,
+    state: u32,
+}
+
+impl Ant {
+    fn new(rng: &mut ThreadRng) -> Self {
+        let angle = rng.gen_range(0.0..PI*2.);
+        let vec = Vec2::from_angle(angle);
+        let center = Vec2::new(SCREEN_WIDTH as f32, SCREEN_HEIGHT as f32)/2.;
+        Ant {
+            pos: (center + vec * 70.).into(),
+            angle,
+            state: 0
+        }
+    }
 }
 
 fn create_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
@@ -85,14 +99,7 @@ async fn run() {
 
     let mut rng = rand::thread_rng();
     let ants: Vec<Ant> = (0..NUM_ANTS)
-        .map(|_| Ant {
-            pos: [
-                rng.gen_range(0.0..SCREEN_WIDTH as f32),
-                rng.gen_range(0.0..SCREEN_HEIGHT as f32),
-            ],
-            angle: rng.gen_range(0.0..std::f32::consts::PI * 2.0),
-            _padding: 0.0,
-        })
+        .map(|_| Ant::new(&mut rng))
         .collect();
 
     let ant_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

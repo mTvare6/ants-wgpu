@@ -1,3 +1,4 @@
+use glam::Vec2;
 use rand::prelude::*;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -5,7 +6,6 @@ use wgpu::util::DeviceExt;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::EventLoop,
-    window::Window,
 };
 
 #[repr(C)]
@@ -14,6 +14,8 @@ struct Ant {
     pos: [f32; 2],
     vel: [f32; 2],
 }
+
+const ANTS_COUNT: usize = 100;
 
 fn create_pheromone_texture(
     device: &wgpu::Device,
@@ -90,17 +92,21 @@ async fn run() {
     };
     surface.configure(&device, &config);
 
-    let num_ants = 10000;
     let mut rng = thread_rng();
-    let ants: Vec<Ant> = (0..num_ants)
+
+    // ants gen
+
+
+    let ants: Vec<Ant> = (0..ANTS_COUNT)
         .map(|_| {
             let angle = rng.gen::<f32>() * 2.0 * std::f32::consts::PI;
+            let vec = Vec2::from_angle(angle);
             Ant {
                 pos: [
-                    rng.gen::<f32>() * size.width as f32,
-                    rng.gen::<f32>() * size.height as f32,
+                    vec.x * 50. + size.width as f32 / 2.,
+                    vec.y * 50. + size.height as f32 / 2.,
                 ],
-                vel: [angle.cos(), angle.sin()],
+                vel: [vec.x, vec.y],
             }
         })
         .collect();
@@ -392,7 +398,11 @@ async fn run() {
                         });
                     compute_pass.set_pipeline(&ant_compute_pipeline);
                     compute_pass.set_bind_group(0, &ant_compute_bind_group, &[]);
-                    compute_pass.dispatch_workgroups((num_ants as f32 / 64.0).ceil() as u32, 1, 1);
+                    compute_pass.dispatch_workgroups(
+                        (ANTS_COUNT as f32 / 64.0).ceil() as u32,
+                        1,
+                        1,
+                    );
                 }
 
                 {
@@ -432,7 +442,7 @@ async fn run() {
                     render_pass.set_pipeline(&ant_pipeline);
                     render_pass.set_bind_group(0, &render_bind_group, &[]);
                     render_pass.set_vertex_buffer(0, ant_buffer.slice(..));
-                    render_pass.draw(0..6, 0..num_ants as u32);
+                    render_pass.draw(0..6, 0..ANTS_COUNT as u32);
                 }
 
                 queue.submit(Some(encoder.finish()));

@@ -40,7 +40,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     
     let existing_color = textureLoad(pheromone_map, tex_coords);
-    let new_color = existing_color + vec4<f32>(0.1, 0.0, 0.0, 0.0); 
+    let new_color = existing_color + vec4<f32>(0.1, 0.0, 0.1, 0.0); // Magenta trail 
     
     textureStore(pheromone_map, tex_coords, clamp(new_color, vec4(0.0), vec4(1.0)));
 }

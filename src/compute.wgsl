@@ -13,6 +13,8 @@ const AWAY: u32 = 0;
 const HOME: u32 = 1;
 const TURN_SPEED: f32 = 0.5;
 const PHEROMONE_STRENGTH: f32 = 1.0; 
+const HOME_POS: vec2<f32> = vec2<f32>(1128., 782.);
+const ANGLE_INFLUENCE: f32 = PI / 4.;
 
 fn sense_pheromone(pos: vec2<f32>, current_angle: f32, angle_offset: f32, state: u32) -> f32 {
   let dims = vec2<f32>(textureDimensions(world_input));
@@ -29,10 +31,8 @@ fn sense_pheromone(pos: vec2<f32>, current_angle: f32, angle_offset: f32, state:
       let sample_x = i32(floor(sense_pos.x + f32(x)));
       let sample_y = i32(floor(sense_pos.y + f32(y)));
 
-
       let wrapped_x = (sample_x + i32(dims.x)) % i32(dims.x);
       let wrapped_y = (sample_y + i32(dims.y)) % i32(dims.y);
-
 
       let sample = textureLoad(world_input, vec2<i32>(wrapped_x, wrapped_y), 0);
 
@@ -66,10 +66,15 @@ fn get_wrapped_coords(pos: vec2<f32>) -> vec2<i32> {
   return vec2<i32>(wrapped_x, wrapped_y);
 }
 
-fn check_for_food(pos: vec2<f32>) -> bool {
+fn check_for_food(color: vec4<f32>) -> bool {
+  return color.g > 0.5 && color.r == 0. && color.b == 0.;
+}
+
+
+fn check_for_wall(pos: vec2<f32>) -> bool {
   let coords = get_wrapped_coords(pos);
   let sample = textureLoad(world_input, coords, 0);
-  return sample.g > 0.5;
+  return sample.r >= 1. && sample.g >= 1. && sample.b >= 1.;
 }
 
 @compute @workgroup_size(64)
@@ -81,33 +86,39 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let current = textureLoad(world_input, coords, 0);
 
 
-  let has_found_food = current.g > 0.5 && ant.state == AWAY;
+  let has_found_food = ant.state == AWAY && check_for_food(current);
   if has_found_food {
     ant.state = HOME;
     ant.angle += PI;
   }
 
-  let center = dims / 2.0;
-  let dist_to_home = distance(ant.pos, center);
-  if dist_to_home < 20.0 && ant.state == HOME {
+  let dist_to_home = distance(ant.pos, HOME_POS);
+  if dist_to_home < 40.0 && ant.state == HOME {
     ant.state = AWAY;
     ant.angle += PI;
   }
 
-  let left = sense_pheromone(ant.pos, ant.angle, -PI / 4.0, ant.state);
+  let left = sense_pheromone(ant.pos, ant.angle, -ANGLE_INFLUENCE, ant.state);
   let forward = sense_pheromone(ant.pos, ant.angle, 0.0, ant.state);
-  let right = sense_pheromone(ant.pos, ant.angle, PI / 4.0, ant.state);
+  let right = sense_pheromone(ant.pos, ant.angle, ANGLE_INFLUENCE, ant.state);
 
   if forward > left && forward > right {
+    ant.angle += (fract(sin(dot(ant.pos, vec2<f32>(12.9898, 78.233))) * 43758.5453) - 0.5) * 0.1;
   } else if right > left {
-    ant.angle += TURN_SPEED * 0.2;
+    ant.angle += TURN_SPEED;
   } else if left > right {
-    ant.angle -= TURN_SPEED * 0.2;
+    ant.angle -= TURN_SPEED;
   }
 
-  ant.angle += (fract(sin(dot(ant.pos, vec2<f32>(12.9898, 78.233))) * 43758.5453) - 0.5) * 0.3;
   let dir = vec2<f32>(cos(ant.angle), sin(ant.angle));
-  ant.pos += dir * 2.0;
+  let update_pos = ant.pos + dir;
+
+  if check_for_wall(update_pos) {
+    ant.angle += PI;
+  } else {
+    ant.pos = update_pos;
+  }
+
 
   if ant.pos.x < 0.0 { ant.pos.x += dims.x; }
   if ant.pos.y < 0.0 { ant.pos.y += dims.y; }

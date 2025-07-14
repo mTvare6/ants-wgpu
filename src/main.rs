@@ -1,7 +1,7 @@
 use glam::Vec2;
 use rand::{rngs::ThreadRng, Rng};
-use std::{f32::consts::PI, iter};
 use std::sync::Arc;
+use std::{f32::consts::PI, iter};
 use wgpu::util::DeviceExt;
 use winit::{
     dpi::LogicalSize,
@@ -12,7 +12,9 @@ use winit::{
 
 const SCREEN_WIDTH: u32 = 2560;
 const SCREEN_HEIGHT: u32 = 1600;
-const NUM_ANTS: u32 = 64;
+// const NUM_ANTS: u32 = 4294967295;
+const NUM_ANTS: u32 = 256 * 256;
+const AWAY: u32 = 0;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,38 +24,90 @@ struct Ant {
     state: u32,
 }
 
+struct FoodSource {
+    position: Vec2,
+    radius: f32,
+}
+
 impl Ant {
     fn new(rng: &mut ThreadRng) -> Self {
-        let angle = rng.gen_range(0.0..PI*2.);
+        let angle = rng.gen_range(0.0..PI * 2.);
         let vec = Vec2::from_angle(angle);
-        let center = Vec2::new(SCREEN_WIDTH as f32, SCREEN_HEIGHT as f32)/2.;
+        let center = Vec2::new(SCREEN_WIDTH as f32, SCREEN_HEIGHT as f32) / 2.;
+        let state = AWAY;
         Ant {
             pos: (center + vec * 70.).into(),
             angle,
-            state: 0
+            state,
         }
     }
 }
 
-fn create_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
-    device
-        .create_texture(&wgpu::TextureDescriptor {
-            label: Some("Pheromone Texture"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::STORAGE_BINDING
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        })
-        .create_view(&wgpu::TextureViewDescriptor::default())
+fn create_world_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    width: u32,
+    height: u32,
+    food_sources: &[FoodSource],
+) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("World Texture"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+
+    let mut world_data = vec![0u8; (width * height * 4) as usize];
+
+    for y in 0..height {
+        for x in 0..width {
+            let pos = Vec2::new(x as f32, y as f32);
+            let idx = ((y * width + x) * 4) as usize;
+
+            for food in food_sources {
+                let dist = pos.distance(food.position);
+                if dist <= food.radius {
+                    world_data[idx] = 0;
+                    world_data[idx + 1] = 255;
+                    world_data[idx + 2] = 0;
+                    world_data[idx + 3] = 255;
+                    break;
+                }
+            }
+        }
+    }
+
+    queue.write_texture(
+        wgpu::ImageCopyTexture {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &world_data,
+        wgpu::ImageDataLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 async fn run() {
@@ -97,10 +151,23 @@ async fn run() {
         .unwrap();
     surface.configure(&device, &config);
 
+    let food_sources = [
+        FoodSource {
+            position: Vec2::new(SCREEN_WIDTH as f32 * 0.25, SCREEN_HEIGHT as f32 * 0.25),
+            radius: 50.0,
+        },
+        FoodSource {
+            position: Vec2::new(SCREEN_WIDTH as f32 * 0.75, SCREEN_HEIGHT as f32 * 0.25),
+            radius: 50.0,
+        },
+        FoodSource {
+            position: Vec2::new(SCREEN_WIDTH as f32 * 0.5, SCREEN_HEIGHT as f32 * 0.75),
+            radius: 50.0,
+        },
+    ];
+
     let mut rng = rand::thread_rng();
-    let ants: Vec<Ant> = (0..NUM_ANTS)
-        .map(|_| Ant::new(&mut rng))
-        .collect();
+    let ants: Vec<Ant> = (0..NUM_ANTS).map(|_| Ant::new(&mut rng)).collect();
 
     let ant_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Ant Buffer"),
@@ -108,15 +175,26 @@ async fn run() {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
 
-    let pheromone_textures = [
-        create_texture(&device, SCREEN_WIDTH, SCREEN_HEIGHT),
-        create_texture(&device, SCREEN_WIDTH, SCREEN_HEIGHT),
+    let world_textures = [
+        create_world_texture(&device, &queue, SCREEN_WIDTH, SCREEN_HEIGHT, &food_sources),
+        create_world_texture(&device, &queue, SCREEN_WIDTH, SCREEN_HEIGHT, &food_sources),
     ];
-    let pheromone_sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+
+    let world_sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
 
     let ant_compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Ant Compute Shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("compute.wgsl").into()),
+    });
+
+    let process_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Process Shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("process.wgsl").into()),
+    });
+
+    let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Render Shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("render.wgsl").into()),
     });
 
     let ant_compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -126,21 +204,11 @@ async fn run() {
         entry_point: "main",
     });
 
-    let process_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Process Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("process.wgsl").into()),
-    });
-
     let process_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Process Pipeline"),
         layout: None,
         module: &process_shader,
         entry_point: "main",
-    });
-
-    let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Render Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("render.wgsl").into()),
     });
 
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -177,7 +245,11 @@ async fn run() {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&pheromone_textures[0]),
+                    resource: wgpu::BindingResource::TextureView(&world_textures[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&world_textures[0]),
                 },
             ],
         }),
@@ -191,7 +263,11 @@ async fn run() {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&pheromone_textures[1]),
+                    resource: wgpu::BindingResource::TextureView(&world_textures[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&world_textures[1]),
                 },
             ],
         }),
@@ -204,11 +280,11 @@ async fn run() {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&pheromone_textures[0]),
+                    resource: wgpu::BindingResource::TextureView(&world_textures[0]),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&pheromone_textures[1]),
+                    resource: wgpu::BindingResource::TextureView(&world_textures[1]),
                 },
             ],
         }),
@@ -218,11 +294,11 @@ async fn run() {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&pheromone_textures[1]),
+                    resource: wgpu::BindingResource::TextureView(&world_textures[1]),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&pheromone_textures[0]),
+                    resource: wgpu::BindingResource::TextureView(&world_textures[0]),
                 },
             ],
         }),
@@ -235,11 +311,11 @@ async fn run() {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&pheromone_sampler),
+                    resource: wgpu::BindingResource::Sampler(&world_sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&pheromone_textures[0]),
+                    resource: wgpu::BindingResource::TextureView(&world_textures[0]),
                 },
             ],
         }),
@@ -249,11 +325,11 @@ async fn run() {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&pheromone_sampler),
+                    resource: wgpu::BindingResource::Sampler(&world_sampler),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&pheromone_textures[1]),
+                    resource: wgpu::BindingResource::TextureView(&world_textures[1]),
                 },
             ],
         }),
@@ -261,83 +337,72 @@ async fn run() {
 
     let mut frame_num = 0;
     event_loop
-        .run(move |event, elwt| {
-            match event {
-                Event::WindowEvent { window_id, event } if window_id == window.id() => {
-                    match event {
-                        WindowEvent::CloseRequested => elwt.exit(),
-                        WindowEvent::RedrawRequested => {
-                            let frame = surface.get_current_texture().unwrap();
-                            let view = frame
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default());
-                            let mut encoder = device
-                                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        .run(move |event, elwt| match event {
+            Event::WindowEvent { window_id, event } if window_id == window.id() => match event {
+                WindowEvent::CloseRequested => elwt.exit(),
+                WindowEvent::RedrawRequested => {
+                    let frame = surface.get_current_texture().unwrap();
+                    let view = frame
+                        .texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
+                    let mut encoder =
+                        device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
 
-                            let read_idx = frame_num % 2;
-                            let write_idx = (frame_num + 1) % 2;
+                    let idx = frame_num % 2;
 
-                            {
-                                let mut compute_pass =
-                                    encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                                        label: Some("Ant Pass"),
-                                        timestamp_writes: None,
-                                    });
-                                compute_pass.set_pipeline(&ant_compute_pipeline);
-                                compute_pass.set_bind_group(0, &ant_bind_groups[read_idx], &[]);
-                                compute_pass.dispatch_workgroups(NUM_ANTS / 64, 1, 1);
-                            }
-
-                            {
-                                let mut compute_pass =
-                                    encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                                        label: Some("Process Pass"),
-                                        timestamp_writes: None,
-                                    });
-                                compute_pass.set_pipeline(&process_pipeline);
-                                compute_pass.set_bind_group(0, &process_bind_groups[read_idx], &[]);
-                                compute_pass.dispatch_workgroups(
-                                    SCREEN_WIDTH / 8,
-                                    SCREEN_HEIGHT / 8,
-                                    1,
-                                );
-                            }
-
-                            {
-                                let mut render_pass =
-                                    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                        label: Some("Render Pass"),
-                                        color_attachments: &[Some(
-                                            wgpu::RenderPassColorAttachment {
-                                                view: &view,
-                                                resolve_target: None,
-                                                ops: wgpu::Operations {
-                                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                                    store: wgpu::StoreOp::Store,
-                                                },
-                                            },
-                                        )],
-                                        depth_stencil_attachment: None,
-                                        timestamp_writes: None,
-                                        occlusion_query_set: None,
-                                    });
-                                render_pass.set_pipeline(&render_pipeline);
-                                render_pass.set_bind_group(0, &render_bind_groups[write_idx], &[]);
-                                render_pass.draw(0..3, 0..1);
-                            }
-
-                            queue.submit(iter::once(encoder.finish()));
-                            frame.present();
-                            frame_num += 1;
-                        }
-                        _ => {}
+                    {
+                        let mut compute_pass =
+                            encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                                label: Some("Process Pass"),
+                                timestamp_writes: None,
+                            });
+                        compute_pass.set_pipeline(&process_pipeline);
+                        compute_pass.set_bind_group(0, &process_bind_groups[idx], &[]);
+                        compute_pass.dispatch_workgroups(SCREEN_WIDTH / 8, SCREEN_HEIGHT / 8, 1);
                     }
-                }
-                Event::AboutToWait => {
-                    window.request_redraw();
+
+                    {
+                        let mut compute_pass =
+                            encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                                label: Some("Ant Pass"),
+                                timestamp_writes: None,
+                            });
+                        compute_pass.set_pipeline(&ant_compute_pipeline);
+                        compute_pass.set_bind_group(0, &ant_bind_groups[idx], &[]);
+                        compute_pass.dispatch_workgroups(NUM_ANTS / 64, 1, 1);
+                    }
+
+                    {
+                        let mut render_pass =
+                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("Render Pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                        render_pass.set_pipeline(&render_pipeline);
+                        render_pass.set_bind_group(0, &render_bind_groups[idx], &[]);
+                        render_pass.draw(0..3, 0..1);
+                    }
+
+                    queue.submit(iter::once(encoder.finish()));
+                    frame.present();
+                    frame_num += 1;
                 }
                 _ => {}
+            },
+            Event::AboutToWait => {
+                window.request_redraw();
             }
+            _ => {}
         })
         .unwrap();
 }

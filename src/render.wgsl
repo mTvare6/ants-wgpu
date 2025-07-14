@@ -1,5 +1,5 @@
-@group(0) @binding(0) var s_pheromone: sampler;
-@group(0) @binding(1) var t_pheromone: texture_2d<f32>;
+@group(0) @binding(0) var world_sampler: sampler;
+@group(0) @binding(1) var world_map: texture_2d<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4<f32> {
@@ -10,8 +10,17 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) ve
 
 @fragment
 fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
-  let dims = vec2<f32>(textureDimensions(t_pheromone));
+  let dims = vec2<f32>(textureDimensions(world_map));
   let uv = frag_coord.xy / dims;
-
-  return textureSample(t_pheromone, s_pheromone, uv);
+  
+  let color = textureSample(world_map, world_sampler, uv);
+  
+  let result = vec4(
+    color.r * 1.5,  // Brighten red pheromone
+    color.g,        // Keep food as is
+    color.b * 1.5,  // Brighten blue pheromone
+    1.0
+  );
+  
+  return result;
 }

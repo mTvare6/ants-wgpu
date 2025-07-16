@@ -4,9 +4,14 @@ struct Ant {
   state: u32
 };
 
+struct FrameUniform {
+  frame_count: u32,
+};
+
 @group(0) @binding(0) var<storage, read_write> ants: array<Ant>;
 @group(0) @binding(1) var world_output: texture_storage_2d<rgba8unorm, write>; 
 @group(0) @binding(2) var world_input: texture_2d<f32>;
+@group(0) @binding(3) var<uniform> uniforms: FrameUniform;
 
 const PI: f32 = 3.14159265359;
 const AWAY: u32 = 0;
@@ -85,6 +90,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let coords = get_wrapped_coords(ant.pos);
   let current = textureLoad(world_input, coords, 0);
 
+  let random = fract(sin(dot(ant.pos, vec2<f32>(12.9898, 78.233)) + f32(uniforms.frame_count)) * 43758.5453);
 
   let has_found_food = ant.state == AWAY && check_for_food(current);
   if has_found_food {

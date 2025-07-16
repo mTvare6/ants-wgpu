@@ -38,6 +38,12 @@ impl Ant {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct FrameUniform {
+    frame_count: u32,
+}
+
 fn create_world_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -143,6 +149,13 @@ async fn run() {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
 
+    let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Frame Uniform Buffer"),
+        size: std::mem::size_of::<FrameUniform>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
     let world_textures = [
         create_world_texture(&device, &queue, SCREEN_WIDTH, SCREEN_HEIGHT),
         create_world_texture(&device, &queue, SCREEN_WIDTH, SCREEN_HEIGHT),
@@ -165,9 +178,63 @@ async fn run() {
         source: wgpu::ShaderSource::Wgsl(include_str!("render.wgsl").into()),
     });
 
+    let ant_compute_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Ant Compute Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+    let ant_compute_pipeline_layout =
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Ant Compute Pipeline Layout"),
+            bind_group_layouts: &[&ant_compute_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
     let ant_compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Ant Compute Pipeline"),
-        layout: None,
+        layout: Some(&ant_compute_pipeline_layout),
         module: &ant_compute_shader,
         entry_point: "main",
     });
@@ -198,14 +265,13 @@ async fn run() {
         multiview: None,
     });
 
-    let ant_bind_group_layout = ant_compute_pipeline.get_bind_group_layout(0);
     let process_bind_group_layout = process_pipeline.get_bind_group_layout(0);
     let render_bind_group_layout = render_pipeline.get_bind_group_layout(0);
 
     let ant_bind_groups = [
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Ant Bind Group 0"),
-            layout: &ant_bind_group_layout,
+            layout: &ant_compute_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -218,12 +284,16 @@ async fn run() {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&world_textures[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: uniform_buffer.as_entire_binding(),
                 },
             ],
         }),
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Ant Bind Group 1"),
-            layout: &ant_bind_group_layout,
+            layout: &ant_compute_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -236,6 +306,10 @@ async fn run() {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&world_textures[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: uniform_buffer.as_entire_binding(),
                 },
             ],
         }),
@@ -309,6 +383,14 @@ async fn run() {
             Event::WindowEvent { window_id, event } if window_id == window.id() => match event {
                 WindowEvent::CloseRequested => elwt.exit(),
                 WindowEvent::RedrawRequested => {
+                    queue.write_buffer(
+                        &uniform_buffer,
+                        0,
+                        bytemuck::cast_slice(&[FrameUniform {
+                            frame_count: frame_num as u32,
+                        }]),
+                    );
+
                     let frame = surface.get_current_texture().unwrap();
                     let view = frame
                         .texture
@@ -316,7 +398,7 @@ async fn run() {
                     let mut encoder =
                         device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
 
-                    let idx = frame_num % 2;
+                    let idx = (frame_num % 2) as usize;
 
                     {
                         let mut compute_pass =

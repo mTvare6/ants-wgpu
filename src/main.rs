@@ -13,7 +13,7 @@ use winit::{
 
 const SCREEN_WIDTH: u32 = 1600;
 const SCREEN_HEIGHT: u32 = 1000;
-const NUM_ANTS: u32 = 4096;
+const NUM_ANTS: u32 = 256*256;
 const AWAY: u32 = 0;
 const HOME: Vec2 = Vec2::new(1128., 782.);
 
@@ -23,6 +23,7 @@ struct Ant {
     pos: [f32; 2],
     angle: f32,
     state: u32,
+    frame_hit: u32,
 }
 
 impl Ant {
@@ -34,6 +35,7 @@ impl Ant {
             pos: (HOME + vec * 30.).into(),
             angle,
             state,
+            frame_hit: 0,
         }
     }
 }
@@ -41,7 +43,9 @@ impl Ant {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct FrameUniform {
+    home: [f32; 2],
     frame_count: u32,
+    _padding: u32,
 }
 
 fn create_world_texture(
@@ -388,6 +392,8 @@ async fn run() {
                         0,
                         bytemuck::cast_slice(&[FrameUniform {
                             frame_count: frame_num as u32,
+                            home: HOME.into(),
+                            _padding: 0
                         }]),
                     );
 

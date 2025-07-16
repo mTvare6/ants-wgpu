@@ -1,10 +1,12 @@
 struct Ant {
   pos: vec2<f32>,
   angle: f32,
-  state: u32
+  state: u32,
+  frame_hit: u32
 };
 
 struct FrameUniform {
+  home: vec2<f32>,
   frame_count: u32,
 };
 
@@ -18,7 +20,6 @@ const AWAY: u32 = 0;
 const HOME: u32 = 1;
 const TURN_SPEED: f32 = 0.5;
 const PHEROMONE_STRENGTH: f32 = 1.0; 
-const HOME_POS: vec2<f32> = vec2<f32>(1128., 782.);
 const ANGLE_INFLUENCE: f32 = PI / 4.;
 
 fn sense_pheromone(pos: vec2<f32>, current_angle: f32, angle_offset: f32, state: u32) -> f32 {
@@ -98,7 +99,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     ant.angle += PI;
   }
 
-  let dist_to_home = distance(ant.pos, HOME_POS);
+  let dist_to_home = distance(ant.pos, uniforms.home);
   if dist_to_home < 40.0 && ant.state == HOME {
     ant.state = AWAY;
     ant.angle += PI;
@@ -121,6 +122,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
   if check_for_wall(update_pos) {
     ant.angle += PI;
+    ant.frame_hit = uniforms.frame_count;
   } else {
     ant.pos = update_pos;
   }

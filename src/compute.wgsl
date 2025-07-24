@@ -7,6 +7,7 @@ struct Ant {
 
 struct FrameUniform {
   home: vec2<f32>,
+  radius: f32,
   frame_count: u32,
 };
 
@@ -18,20 +19,23 @@ struct FrameUniform {
 const PI: f32 = 3.14159265359;
 const AWAY: u32 = 0;
 const HOME: u32 = 1;
-const TURN_SPEED: f32 = 0.3;
-const PHEROMONE_STRENGTH: f32 = 0.3; 
+const TURN_SPEED: f32 = 0.1;
+const PHEROMONE_STRENGTH: f32 = 0.1;
 const ANGLE_INFLUENCE: f32 = PI / 4.;
-const THETA: f32 = PI / 2.;
+const THETA: f32 = PI / 4.;
+
+const LOOK_FORWARD: f32 = 10.0;
+const GRID_FACTOR: i32 = 1;
 
 fn sense_pheromone(pos: vec2<f32>, current_angle: f32, angle_offset: f32, state: u32) -> f32 {
   let dims = vec2<f32>(textureDimensions(world_input));
   let angle = current_angle + angle_offset;
   let dir = vec2<f32>(cos(angle), sin(angle));
-  let sense_pos = pos + dir * 10.0;
+  let sense_pos = pos + dir * LOOK_FORWARD;
 
   var total_pheromone: f32 = 0.0;
-  for (var y: i32 = -1; y <= 1; y = y + 1) {
-    for (var x: i32 = -1; x <= 1; x = x + 1) {
+  for (var y: i32 = -GRID_FACTOR; y <= GRID_FACTOR; y = y + 1) {
+    for (var x: i32 = -GRID_FACTOR; x <= GRID_FACTOR; x = x + 1) {
       let sample_x = i32(floor(sense_pos.x + f32(x)));
       let sample_y = i32(floor(sense_pos.y + f32(y)));
 
@@ -91,10 +95,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     ant.angle += PI;
   }
 
-  let dist_to_home = distance(ant.pos, uniforms.home);
-  if dist_to_home < 100.0 && ant.state == HOME {
-    ant.state = AWAY;
+  let in_home = distance(ant.pos, uniforms.home) <= uniforms.radius;
+
+  if in_home {
     ant.angle += PI;
+    if ant.state == HOME {
+      ant.state = AWAY;
+    }
   }
 
   let left = sense_pheromone(ant.pos, ant.angle, -ANGLE_INFLUENCE, ant.state);

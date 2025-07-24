@@ -13,9 +13,10 @@ use winit::{
 
 const SCREEN_WIDTH: u32 = 1600;
 const SCREEN_HEIGHT: u32 = 1000;
-const NUM_ANTS: u32 = 256*256;
+const NUM_ANTS: u32 = 256 * 256;
 const AWAY: u32 = 0;
-const HOME: Vec2 = Vec2::new(1128., 782.);
+const HOME: Vec2 = Vec2::new(850., 560.);
+const RADIUS: f32 = 70.;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -32,7 +33,7 @@ impl Ant {
         let vec = Vec2::from_angle(angle);
         let state = AWAY;
         Ant {
-            pos: (HOME + vec * 30.).into(),
+            pos: (HOME + vec * (RADIUS + 10.)).into(),
             angle,
             state,
             frame_hit: 0,
@@ -44,8 +45,8 @@ impl Ant {
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct FrameUniform {
     home: [f32; 2],
+    radius: f32,
     frame_count: u32,
-    _padding: u32,
 }
 
 fn create_world_texture(
@@ -250,9 +251,48 @@ async fn run() {
         entry_point: "main",
     });
 
+    let render_bind_group_layout =
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Render Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+    let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Render Pipeline Layout"),
+        bind_group_layouts: &[&render_bind_group_layout],
+        push_constant_ranges: &[],
+    });
+
     let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render Pipeline"),
-        layout: None,
+        layout: Some(&render_pipeline_layout),
         vertex: wgpu::VertexState {
             module: &render_shader,
             entry_point: "vs_main",
@@ -270,7 +310,6 @@ async fn run() {
     });
 
     let process_bind_group_layout = process_pipeline.get_bind_group_layout(0);
-    let render_bind_group_layout = render_pipeline.get_bind_group_layout(0);
 
     let ant_bind_groups = [
         device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -363,6 +402,10 @@ async fn run() {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&world_textures[0]),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
             ],
         }),
         device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -376,6 +419,10 @@ async fn run() {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&world_textures[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform_buffer.as_entire_binding(),
                 },
             ],
         }),
@@ -393,7 +440,7 @@ async fn run() {
                         bytemuck::cast_slice(&[FrameUniform {
                             frame_count: frame_num as u32,
                             home: HOME.into(),
-                            _padding: 0
+                            radius: RADIUS,
                         }]),
                     );
 
